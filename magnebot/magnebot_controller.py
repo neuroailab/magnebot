@@ -7,7 +7,6 @@ from _tkinter import TclError
 from ikpy.chain import Chain
 from ikpy.link import OriginLink, URDFLink, Link
 from ikpy.utils import geometry
-from tdw.floorplan_controller import FloorplanController
 from tdw.output_data import OutputData, Version, StaticRobot, SegmentationColors, Bounds, Rigidbodies, LogMessage,\
     Robot, TriggerCollision
 from tdw.output_data import Magnebot as Mag
@@ -31,7 +30,7 @@ from magnebot.turn_constants import TurnConstants
 from magnebot.collision_action import CollisionAction
 
 
-class Magnebot(FloorplanController):
+class Magnebot():
     """
     [TDW controller](https://github.com/threedworld-mit/tdw) for Magnebots. This high-level API supports:
 
@@ -193,11 +192,6 @@ class Magnebot(FloorplanController):
 
         self._debug = debug
 
-        # Get a random seed.
-        if random_seed is None:
-            random_seed = self.get_unique_id()
-        self._rng = np.random.RandomState(random_seed)
-
         """:field
         [Dynamic data for all of the most recent frame after doing an action.](scene_state.md) This includes image data, physics metadata, etc.       
         
@@ -251,12 +245,6 @@ class Magnebot(FloorplanController):
         # For example, if `self.previous_collision == CollisionAction.move_positive` and Magnebot tries `move_by(1)`,
         # the action immediately fails because the previous `move_by()` had a positive value and ended in a collision.
         self._previous_collision: CollisionAction = CollisionAction.none
-
-        # Commands to initialize objects.
-        self._object_init_commands: Dict[int, List[dict]] = dict()
-
-        # Used in `step_physics` per frame.
-        self._skip_frames: int = skip_frames
 
         """:field
         [Data for all objects in the scene that that doesn't change between frames, such as object IDs, mass, etc.](object_static.md) Key = the ID of the object..
@@ -319,16 +307,9 @@ class Magnebot(FloorplanController):
 
         Note that it is possible for the Magnebot to go to positions that aren't "free". The Magnebot's base is a rectangle that is longer on the sides than the front and back. The occupancy grid cell size is defined by the longer axis, so it is possible for the Magnebot to move forward and squeeze into a smaller space. The Magnebot can also push, lift, or otherwise move objects out of its way.
         """
-        self.occupancy_map: Optional[np.array] = None
-
-        # The scene bounds. This is used along with the occupancy map to get (x, z) worldspace positions.
-        self._scene_bounds: Optional[dict] = None
 
         # Commands that will be sent on the next frame.
         self._next_frame_commands: List[dict] = list()
-
-        # Send these commands every frame.
-        self._per_frame_commands: List[dict] = list()
 
         # If True, the Magnebot is about to tip over.
         self._about_to_tip = False
@@ -341,99 +322,6 @@ class Magnebot(FloorplanController):
         # Key = The trigger collider object.
         # Value = A list of trigger events that started and have continued (enter with an exit).
         self._trigger_events: Dict[int, List[int]] = dict()
-        super().__init__(port=port, launch_build=launch_build, check_version=check_pypi_version)
-        # Set image encoding to .png (default) or .jpg
-        # Set the highest render quality.
-        # Set global physics values.
-        resp = self.communicate([{"$type": "set_img_pass_encoding",
-                                  "value": img_is_png},
-                                 {"$type": "set_render_quality",
-                                  "render_quality": 5},
-                                 {"$type": "set_shadow_strength",
-                                  "strength": 1.0},
-                                 {"$type": "set_screen_size",
-                                  "width": screen_width,
-                                  "height": screen_height},
-                                 {"$type": "send_version"}])
-
-        # Make sure that the build is the correct version.
-        if not launch_build:
-            version = get_data(resp=resp, d_type=Version)
-            build_version = version.get_tdw_version()
-            python_version = PyPi.get_installed_tdw_version(truncate=True)
-            if build_version != python_version:
-                print(f"Your installed version of tdw ({python_version}) doesn't match the version of the build "
-                      f"{build_version}. This might cause errors!")
-        # Make sure that the Magnebot API is up to date.
-        if check_pypi_version:
-            check_version()
-
-    def init_scene(self, scene: str, layout: int, room: int = None) -> ActionStatus:
-        """
-        **Always call this function before any other API calls.** Initialize a scene, populate it with objects, and add the Magnebot.
-
-        It might take a few minutes to initialize the scene. You can call `init_scene()` more than once to reset the simulation; subsequent resets at runtime should be extremely fast.
-
-        Set the `scene` and `layout` parameters in `init_scene()` to load an interior scene with furniture and props. Set the `room` to spawn the avatar in the center of a specific room.
-
-        ```python
-        from magnebot import Magnebot
-
-        m = Magnebot()
-        m.init_scene(scene="2b", layout=0, room=1)
-
-        # Your code here.
-        ```
-
-        Valid scenes, layouts, and rooms:
-
-        | `scene` | `layout` | `room` |
-        | --- | --- | --- |
-        | 1a, 1b, 1c | 0, 1, 2 | 0, 1, 2, 3, 4, 5, 6 |
-        | 2a, 2b, 2c | 0, 1, 2 | 0, 1, 2, 3, 4, 5, 6, 7, 8 |
-        | 4a, 4b, 4c | 0, 1, 2 | 0, 1, 2, 3, 4, 5, 6, 7 |
-        | 5a, 5b, 5c | 0, 1, 2 | 0, 1, 2, 3 |
-
-        Images of each scene+layout combination can be found [here](https://github.com/alters-mit/magnebot/tree/master/doc/images/floorplans). Images are named `[scene]_[layout].jpg` For example, the image for scene "2a" layout 0 is: `2a_0.jpg`.
-
-        Images of where each room in a scene is can be found [here](https://github.com/alters-mit/magnebot/tree/master/doc/images/rooms). Images are named `[scene].jpg` For example, the image for scene "2a" layout 0 is: `2.jpg`.
-
-        Possible [return values](action_status.md):
-
-        - `success`
-
-        :param scene: The name of an interior floorplan scene. Each number (1, 2, etc.) has a different shape, different rooms, etc. Each letter (a, b, c) is a cosmetically distinct variant with the same floorplan.
-        :param layout: The furniture layout of the floorplan. Each number (0, 1, 2) will populate the floorplan with different furniture in different positions.
-        :param room: The index of the room that the Magnebot will spawn in the center of. If None, the room will be chosen randomly.
-
-        :return: An `ActionStatus` (always success).
-        """
-
-        # Clear all data from the previous scene.
-        self._clear_data()
-        # Load the occupancy map.
-        self.occupancy_map = np.load(str(OCCUPANCY_MAPS_DIRECTORY.joinpath(f"{scene[0]}_{layout}.npy").resolve()))
-        # Get the scene bounds.
-        self._scene_bounds = loads(SCENE_BOUNDS_PATH.read_text())[scene[0]]
-
-        commands = self.get_scene_init_commands(scene=scene, layout=layout, audio=True)
-
-        # Spawn the Magnebot in the center of a room.
-        rooms = loads(SPAWN_POSITIONS_PATH.read_text())[scene[0]][str(layout)]
-        room_keys = list(rooms.keys())
-        if room is None:
-            room = self._rng.choice(room_keys)
-        else:
-            room = str(room)
-            assert room in room_keys, f"Invalid room: {room}; valid rooms are: {room_keys}"
-        commands.extend(self._get_scene_init_commands(magnebot_position=rooms[room]))
-
-        resp = self.communicate(commands)
-        self._cache_static_data(resp=resp)
-        # Wait for the Magnebot to reset to its neutral position.
-        status = self._do_arm_motion()
-        self._end_action()
-        return status
 
     def turn_by(self, angle: float, aligned_at: float = 3, stop_on_collision: bool = True) -> ActionStatus:
         """
@@ -1110,84 +998,6 @@ class Magnebot(FloorplanController):
         self._end_action()
         return ActionStatus.success
 
-    def add_camera(self, position: Dict[str, float], roll: float = 0, pitch: float = 0, yaw: float = 0,
-                   look_at: bool = True, follow: bool = False, camera_id: str = "c") -> ActionStatus:
-        """
-        Add a third person camera (i.e. a camera not attached to the any object) to the scene. This camera will render concurrently with the camera attached to the Magnebot and will output images at the end of every action (see [`SceneState.third_person_images`](scene_state.md)).
-
-        This should only be sent per `init_scene()` call. When `init_scene()` is called to reset the simulation, you'll need to send `add_camera()` again too.
-
-        Possible [return values](action_status.md):
-
-        - `success`
-
-        :param position: The initial position of the camera. If `follow == True`, this is relative to the Magnebot. If `follow == False`, this is in absolute worldspace coordinates.
-        :param roll: The initial roll of the camera in degrees.
-        :param pitch: The initial pitch of the camera in degrees.
-        :param yaw: The initial yaw of the camera in degrees.
-        :param look_at: If True, on every frame, the camera will rotate to look at the Magnebot.
-        :param follow: If True, on every frame, the camera will follow the Magnebot, maintaining a constant relative position and rotation.
-        :param camera_id: The ID of this camera.
-
-        :return: An `ActionStatus` (always `success`).
-        """
-
-        self._next_frame_commands.extend(TDWUtils.create_avatar(avatar_id="c"))
-        self._next_frame_commands.extend([{"$type": "set_pass_masks",
-                                           "pass_masks": ["_img"],
-                                           "avatar_id": camera_id},
-                                          {"$type": "set_anti_aliasing",
-                                           "mode": "subpixel",
-                                           "avatar_id": camera_id}])
-
-        if follow:
-            # Follow the Magnebot. `object_id` is the Magnebot's assumed ID.
-            self._per_frame_commands.append({"$type": "follow_object",
-                                             "avatar_id": camera_id,
-                                             "position": position,
-                                             "object_id": 0})
-        else:
-            self._next_frame_commands.append({"$type": "teleport_avatar_to",
-                                              "avatar_id": camera_id,
-                                              "position": position})
-        # Set the initial rotation.
-        for angle, axis in zip([roll, pitch, yaw], ["roll", "pitch", "yaw"]):
-            self._next_frame_commands.append({"$type": "rotate_sensor_container_by",
-                                              "axis": axis,
-                                              "angle": angle,
-                                              "avatar_id": camera_id})
-        if look_at:
-            self._per_frame_commands.append({"$type": "look_at",
-                                             "avatar_id": camera_id})
-
-        self._end_action()
-        return ActionStatus.success
-
-    def get_occupancy_position(self, i: int, j: int) -> Tuple[float, float]:
-        """
-        Converts the position `(i, j)` in the occupancy map to `(x, z)` worldspace coordinates.
-
-        ```python
-        from magnebot import Magnebot
-
-        m = Magnebot(launch_build=False)
-        m.init_scene(scene="1a", layout=0)
-        x = 30
-        y = 16
-        print(m.occupancy_map[x][y]) # 0 (free and navigable position)
-        print(m.get_occupancy_position(x, y)) # (1.1157886505126946, 2.2528389358520506)
-        ```
-
-        :param i: The i coordinate in the occupancy map.
-        :param j: The j coordinate in the occupancy map.
-
-        :return: Tuple: (x coordinate; z coordinate) of the corresponding worldspace position.
-        """
-
-        x = self._scene_bounds["x_min"] + (i * OCCUPANCY_CELL_SIZE)
-        z = self._scene_bounds["z_min"] + (j * OCCUPANCY_CELL_SIZE)
-        return x, z
-
     def get_visible_objects(self) -> List[int]:
         """
         Get all objects visible to the Magnebot in `self.state` using the id (segmentation color) image.
@@ -1205,155 +1015,6 @@ class Magnebot(FloorplanController):
                 continue
         # This should never happen, but it's better to prevent the build rom crashing.
         return []
-        
-    def end(self) -> None:
-        """
-        End the simulation. Terminate the build process.
-        """
-
-        self.communicate({"$type": "terminate"})
-
-    def communicate(self, commands: Union[dict, List[dict]]) -> List[bytes]:
-        """
-        Use this function to send low-level TDW API commands and receive low-level output data. See: [`Controller.communicate()`](https://github.com/threedworld-mit/tdw/blob/master/Documentation/python/controller.md)
-
-        You shouldn't ever need to use this function, but you might see it in some of the example controllers because they might require a custom scene setup.
-
-        :param commands: Commands to send to the build. See: [Command API](https://github.com/threedworld-mit/tdw/blob/master/Documentation/api/command_api.md).
-
-        :return: The response from the build as a list of byte arrays. See: [Output Data](https://github.com/threedworld-mit/tdw/blob/master/Documentation/api/output_data.md).
-        """
-
-        if not isinstance(commands, list):
-            commands = [commands]
-        # Add commands for this frame only.
-        commands.extend(self._next_frame_commands)
-        self._next_frame_commands.clear()
-        # Add per-frame commands.
-        commands.extend(self._per_frame_commands)
-        # Skip some frames to speed up the simulation.
-        commands.append({"$type": "step_physics",
-                         "frames": self._skip_frames})
-
-        if not self._debug:
-            # Send the commands and get a response.
-            resp = super().communicate(commands)
-        else:
-            resp = super().communicate(commands)
-            # Print log messages.
-            for i in range(len(resp) - 1):
-                r_id = OutputData.get_data_type_id(resp[i])
-                if r_id == "logm":
-                    log_message = LogMessage(resp[i])
-                    print(f"[Build]: {log_message.get_message_type()}, {log_message.get_message()}\t"
-                          f"{log_message.get_object_type()}")
-        # Get collisions.
-        if self.magnebot_static is not None:
-            collisions = Collisions(resp=resp)
-            for int_pair in collisions.obj_collisions:
-                # Ignore collisions unless they are with the Magnebot.
-                if int_pair.int1 not in self.magnebot_static.body_parts and int_pair.int2 not in \
-                        self.magnebot_static.body_parts:
-                    continue
-                # Ignore collisions that don't involve an object.
-                if int_pair.int1 not in self.objects_static and int_pair.int2 not in self.objects_static:
-                    continue
-                if int_pair.int1 in self.objects_static:
-                    object_id = int_pair.int1
-                else:
-                    object_id = int_pair.int2
-                # Remove object IDs if this is an exit event.
-                if collisions.obj_collisions[int_pair].state == "exit" and object_id in self.colliding_objects:
-                    self.colliding_objects.remove(object_id)
-                # Add object IDs if this is a new enter event.
-                elif collisions.obj_collisions[int_pair].state == "enter" and object_id not in self.colliding_objects:
-                    self.colliding_objects.append(object_id)
-            # Check if the Magnebot is colliding with a wall.
-            for object_id in collisions.env_collisions:
-                # Ignore collisions with the floor.
-                if collisions.env_collisions[object_id].floor or object_id not in self.magnebot_static.joints:
-                    continue
-                if collisions.env_collisions[object_id].state == "enter":
-                    self.colliding_with_wall = True
-                    break
-                else:
-                    self.colliding_with_wall = False
-            # Get trigger events.
-            trigger_enters: Dict[int, List[int]] = dict()
-            trigger_stays: Dict[int, List[int]] = dict()
-            for i in range(len(resp) - 1):
-                r_id = OutputData.get_data_type_id(resp[i])
-                if r_id == "trco":
-                    trigger = TriggerCollision(resp[i])
-                    trigger_id = trigger.get_collidee_id()
-                    if trigger_id not in self._trigger_events:
-                        self._trigger_events[trigger_id] = list()
-                    collider_id = trigger.get_collider_id()
-                    state = trigger.get_state()
-                    # New trigger event.
-                    if state == "enter" and collider_id not in self._trigger_events[trigger_id]:
-                        self._trigger_events[trigger_id].append(collider_id)
-                        if trigger_id not in trigger_enters:
-                            trigger_enters[trigger_id] = list()
-                        trigger_enters[trigger_id].append(collider_id)
-                    # Ongoing trigger event.
-                    else:
-                        if trigger_id not in trigger_stays:
-                            trigger_stays[trigger_id] = list()
-                        trigger_stays[trigger_id].append(collider_id)
-            temp: Dict[int, List[int]] = dict()
-            # Remove any enter collisions that don't have stays.
-            for trigger_id in self._trigger_events:
-                if trigger_id not in trigger_stays:
-                    continue
-                stays: List[int] = list()
-                for collider_id in self._trigger_events[trigger_id]:
-                    if trigger_id in trigger_enters and collider_id in trigger_enters[trigger_id]:
-                        stays.append(collider_id)
-                    elif trigger_id in trigger_stays and collider_id in trigger_stays[trigger_id]:
-                        stays.append(collider_id)
-                temp[trigger_id] = stays
-            self._trigger_events = temp
-
-        # Check if the Magnebot is about to tip.
-        r = get_data(resp=resp, d_type=Robot)
-        m = get_data(resp=resp, d_type=Mag)
-        if r is not None and m is not None:
-            bottom = np.array(r.get_position())
-            top = np.array(m.get_top())
-            bottom_top_distance = np.linalg.norm(np.array([bottom[0], bottom[2]]) - np.array([top[0], top[2]]))
-            self._about_to_tip = bottom_top_distance > 0.2
-        return resp
-
-    def _add_object(self, model_name: str, position: Dict[str, float] = None,
-                    rotation: Dict[str, float] = None, library: str = "models_core.json",
-                    scale: Dict[str, float] = None, audio: ObjectInfo = None,
-                    mass: float = None) -> int:
-        """
-        Add an object to the scene.
-
-        :param model_name: The name of the model.
-        :param position: The position of the model.
-        :param rotation: The starting rotation of the model. Can be Euler angles or a quaternion.
-        :param library: The path to the records file. If left empty, the default library will be selected. See `ModelLibrarian.get_library_filenames()` and `ModelLibrarian.get_default_library()`.
-        :param scale: The scale factor of the object. If None, the scale factor is (1, 1, 1)
-        :param audio: Audio values for the object. If None, use default values.
-        :param mass: If not None, use this mass instead of the default.
-
-        :return: The ID of the object.
-        """
-
-        # Get the data.
-        # There isn't any audio in this simulation, but we use `AudioInitData` anyway to derive physics values.
-        if audio is None:
-            audio = Magnebot._OBJECT_AUDIO[model_name]
-        if mass is not None:
-            audio.mass = mass
-        init_data = AudioInitData(name=model_name, position=position, rotation=rotation, scale_factor=scale,
-                                  audio=audio, library=library)
-        object_id, object_commands = init_data.get_commands()
-        self._object_init_commands[object_id] = object_commands
-        return object_id
 
     def _end_action(self, previous_action_was_move: bool = False) -> List[bytes]:
         """
@@ -1399,63 +1060,6 @@ class Magnebot(FloorplanController):
         if self.auto_save_images:
             self.state.save_images(output_directory=self.images_directory)
         return resp
-
-    def _get_scene_init_commands(self, magnebot_position: Dict[str, float] = None) -> List[dict]:
-        """
-        :param magnebot_position: The position of the Magnebot. If none, the position is (0, 0, 0).
-
-        :return: A list of commands that every controller needs for initializing the scene.
-        """
-
-        if magnebot_position is None:
-            magnebot_position = TDWUtils.VECTOR3_ZERO
-
-        # Destroy the previous Magnebot, if any.
-        # Add the Magnebot.
-        # Set the maximum number of held objects per magnet.
-        # Set the number of objects that the Magnebot can hold.
-        # Add the avatar (camera).
-        # Parent the avatar to the Magnebot.
-        # Set pass masks.
-        # Disable the image sensor.
-        commands = [{"$type": "add_magnebot",
-                     "position": magnebot_position},
-                    {"$type": "set_immovable",
-                     "immovable": True},
-                    {"$type": "create_avatar",
-                     "type": "A_Img_Caps_Kinematic"},
-                    {"$type": "set_pass_masks",
-                     "pass_masks": ["_img", "_id", "_depth"]},
-                    {"$type": "enable_image_sensor",
-                     "enable": False},
-                    {"$type": "set_anti_aliasing",
-                     "mode": "subpixel"}]
-        # Add the objects.
-        for object_id in self._object_init_commands:
-            commands.extend(self._object_init_commands[object_id])
-        # Request output data.
-        commands.extend([{"$type": "send_robots",
-                          "frequency": "always"},
-                         {"$type": "send_transforms",
-                          "frequency": "always"},
-                         {"$type": "send_magnebots",
-                          "frequency": "always"},
-                         {"$type": "send_static_robots",
-                          "frequency": "once"},
-                         {"$type": "send_segmentation_colors",
-                          "frequency": "once"},
-                         {"$type": "send_rigidbodies",
-                          "frequency": "once"},
-                         {"$type": "send_bounds",
-                          "frequency": "once"},
-                         {"$type": "send_collisions",
-                          "enter": True,
-                          "stay": False,
-                          "exit": True,
-                          "collision_types": ["obj", "env"]}])
-        if self._debug:
-            commands.append({"$type": "send_log_messages"})
-        return commands
 
     def _start_action(self) -> None:
         """
@@ -2029,23 +1633,6 @@ class Magnebot(FloorplanController):
                               state_1.joint_angles[w_id][0]) > 0.1:
                 return True
         return False
-
-    def _clear_data(self) -> None:
-        """
-        Clear persistent simulation data from the previous simulation.
-        """
-
-        self.objects_static.clear()
-        self.colliding_objects.clear()
-        self.colliding_with_wall = False
-        self.camera_rpy: np.array = np.array([0, 0, 0])
-        self._next_frame_commands.clear()
-        self._trigger_events.clear()
-        self._per_frame_commands.clear()
-        self._object_init_commands.clear()
-        self._about_to_tip = False
-        self._previous_collision = CollisionAction.none
-        self._previous_action_was_move = False
 
     def _stop_joints(self, state: SceneState, joint_ids: List[int] = None) -> None:
         """
