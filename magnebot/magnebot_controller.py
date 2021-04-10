@@ -377,7 +377,7 @@ class Magnebot():
             __set_collision_action(False)
             return ActionStatus.success
         self._start_action()
-        self._start_move_or_turn()
+        yield from self._start_move_or_turn()
         attempts = 0
         if self._debug:
             print(f"turn_by: {angle}")
@@ -424,17 +424,17 @@ class Magnebot():
                                  "target": target,
                                  "joint_id": self.magnebot_static.wheels[wheel]})
             # Wait until the wheels are done turning.
-            state_0 = SceneState(resp=self.communicate(commands))
+            state_0 = SceneState(yield from resp=self.communicate(commands))
             turn_done = False
             turn_frames = 0
             while not turn_done and turn_frames < 2000:
-                resp = self.communicate([])
+                resp = yield from self.communicate([])
                 state_1 = SceneState(resp=resp)
                 # If the Magnebot is about to tip over, stop the action and try to correct the tip.
                 # Mark this is as a collision so the Magnebot can't do the same action again.
                 if self._about_to_tip:
-                    self._stop_tipping(state=state_1)
-                    self._end_action(previous_action_was_move=True)
+                    yield from self._stop_tipping(state=state_1)
+                    yield from self._end_action(previous_action_was_move=True)
                     __set_collision_action(True)
                     return ActionStatus.tipping
                 # Check if we collided with the environment or with any objects.
@@ -442,7 +442,7 @@ class Magnebot():
                     self._stop_wheels(state=state_1)
                     if self._debug:
                         print("Collision. Stopping movement.")
-                    self._end_action(previous_action_was_move=True)
+                    yield from self._end_action(previous_action_was_move=True)
                     __set_collision_action(True)
                     return ActionStatus.collision
 
@@ -456,7 +456,7 @@ class Magnebot():
                 self._stop_wheels(state=wheel_state)
                 if self._debug:
                     print("Couldn't complete turn! Stopping movement.")
-                self._end_action(previous_action_was_move=True)
+                yield from self._end_action(previous_action_was_move=True)
                 __set_collision_action(True)
                 return ActionStatus.collision
             # Get the change in angle from the initial rotation.
@@ -465,7 +465,7 @@ class Magnebot():
             # If the angle to the target is very small, then we're done.
             if np.abs(angle - theta) < aligned_at:
                 self._stop_wheels(state=wheel_state)
-                self._end_action(previous_action_was_move=True)
+                yield from self._end_action(previous_action_was_move=True)
                 __set_collision_action(False)
                 if self._debug:
                     print("Turn complete!")
@@ -478,7 +478,7 @@ class Magnebot():
             if self._debug:
                 print(f"angle: {angle}", f"delta_angle: {delta_angle}", f"spin: {spin}", f"d: {d}", f"theta: {theta}")
         self._stop_wheels(state=wheel_state)
-        self._end_action(previous_action_was_move=True)
+        yield from self._end_action(previous_action_was_move=True)
         # If the Magenbot failed to turn, mark this as a collision (even if it wasn't)
         # so the Magnebot can't choose the same action and direction again.
         __set_collision_action(True)
@@ -513,7 +513,7 @@ class Magnebot():
 
         angle = TDWUtils.get_angle_between(v1=self.state.magnebot_transform.forward,
                                            v2=target - self.state.magnebot_transform.position)
-        return self.turn_by(angle=angle, aligned_at=aligned_at, stop_on_collision=stop_on_collision)
+        return yield from self.turn_by(angle=angle, aligned_at=aligned_at, stop_on_collision=stop_on_collision)
 
     def move_by(self, distance: float, arrived_at: float = 0.3, stop_on_collision: bool = True) -> ActionStatus:
         """
@@ -554,7 +554,7 @@ class Magnebot():
             return ActionStatus.collision
 
         self._start_action()
-        self._start_move_or_turn()
+        yield from self._start_move_or_turn()
 
         # The initial position of the robot.
         p0 = self.state.magnebot_transform.position
@@ -563,7 +563,7 @@ class Magnebot():
         d_0 = d
         # We're already here.
         if d < arrived_at:
-            self._end_action(previous_action_was_move=True)
+            yield from self._end_action(previous_action_was_move=True)
             if self._debug:
                 print(f"No movement. We're already here: {d}")
             __set_collision_action(False)
@@ -578,7 +578,7 @@ class Magnebot():
             print(f"move_by: {distance}")
         # The approximately number of iterations required, given the distance and speed.
         # Wait for the wheels to stop turning.
-        wheel_state = SceneState(resp=self.communicate([]))
+        wheel_state = SceneState(resp=yield from self.communicate([]))
         while attempts < num_attempts:
             # We are trying to adjust the distance.
             if self._debug:
@@ -592,17 +592,17 @@ class Magnebot():
                                  "target": target,
                                  "joint_id": self.magnebot_static.wheels[wheel]})
             # Wait for the wheels to stop turning.
-            move_state_0 = SceneState(resp=self.communicate(commands))
+            move_state_0 = SceneState(resp=yield from self.communicate(commands))
             move_done = False
             move_frames = 0
             while not move_done and move_frames < 2000:
-                resp = self.communicate([])
+                resp = yield from self.communicate([])
                 move_state_1 = SceneState(resp=resp)
                 # If we're about to tip over, immediately stop and try to correct the tip.
                 # End the action and record it as a collision to prevent the Magnebot from trying the same action again.
                 if self._about_to_tip:
-                    self._stop_tipping(state=move_state_1)
-                    self._end_action(previous_action_was_move=True)
+                    yield from self._stop_tipping(state=move_state_1)
+                    yield from self._end_action(previous_action_was_move=True)
                     __set_collision_action(True)
                     return ActionStatus.tipping
 
@@ -617,7 +617,7 @@ class Magnebot():
                     self._stop_wheels(state=move_state_1)
                     if self._debug:
                         print("Collision. Stopping movement.")
-                    self._end_action(previous_action_was_move=True)
+                    yield from self._end_action(previous_action_was_move=True)
                     __set_collision_action(True)
                     return ActionStatus.collision
             wheel_state = move_state_0
@@ -626,7 +626,7 @@ class Magnebot():
                 self._stop_wheels(state=wheel_state)
                 if self._debug:
                     print("Couldn't complete move! Stopping movement.")
-                self._end_action(previous_action_was_move=True)
+                yield from self._end_action(previous_action_was_move=True)
                 __set_collision_action(True)
                 return ActionStatus.collision
             # Check if we're at the destination.
@@ -635,7 +635,7 @@ class Magnebot():
 
             # Arrived!
             if d < arrived_at:
-                self._end_action(previous_action_was_move=True)
+                yield from self._end_action(previous_action_was_move=True)
                 if self._debug:
                     print("Move complete!", TDWUtils.array_to_vector3(self.state.magnebot_transform.position), d)
                 __set_collision_action(False)
@@ -651,7 +651,7 @@ class Magnebot():
             attempts += 1
         p1 = wheel_state.magnebot_transform.position
         d = np.linalg.norm(p1 - p0)
-        self._end_action(previous_action_was_move=True)
+        yield from self._end_action(previous_action_was_move=True)
         # Arrived!
         if np.abs(np.abs(distance) - d) < arrived_at:
             __set_collision_action(False)
@@ -687,7 +687,7 @@ class Magnebot():
         """
 
         # Turn to face the target.
-        status = self.turn_to(target=target, aligned_at=aligned_at, stop_on_collision=stop_on_collision)
+        status = yield from self.turn_to(target=target, aligned_at=aligned_at, stop_on_collision=stop_on_collision)
         # Move to the target.
         if status == ActionStatus.success:
             if isinstance(target, int):
@@ -700,9 +700,9 @@ class Magnebot():
             else:
                 raise Exception(f"Invalid target: {target}")
 
-            return self.move_by(distance=distance, arrived_at=arrived_at, stop_on_collision=stop_on_collision)
+            return yield from self.move_by(distance=distance, arrived_at=arrived_at, stop_on_collision=stop_on_collision)
         else:
-            self._end_action()
+            yield from self._end_action()
             return status
 
     def reset_position(self) -> ActionStatus:
@@ -1016,6 +1016,122 @@ class Magnebot():
         # This should never happen, but it's better to prevent the build rom crashing.
         return []
 
+    def communicate(self, commands: Union[dict, List[dict]]) -> List[bytes]:
+        """
+        Use this function to send low-level TDW API commands and receive low-level output data. See: [`Controller.communicate()`](https://github.com/threedworld-mit/tdw/blob/master/Documentation/python/controller.md)
+
+        You shouldn't ever need to use this function, but you might see it in some of the example controllers because they might require a custom scene setup.
+
+        :param commands: Commands to send to the build. See: [Command API](https://github.com/threedworld-mit/tdw/blob/master/Documentation/api/command_api.md).
+
+        :return: The response from the build as a list of byte arrays. See: [Output Data](https://github.com/threedworld-mit/tdw/blob/master/Documentation/api/output_data.md).
+        """
+
+        if not isinstance(commands, list):
+            commands = [commands]
+        # Add commands for this frame only.
+        commands.extend(self._next_frame_commands)
+        self._next_frame_commands.clear()
+        # Add per-frame commands.
+        commands.extend(self._per_frame_commands)
+        # Skip some frames to speed up the simulation.
+        commands.append({"$type": "step_physics",
+                         "frames": self._skip_frames})
+
+        if not self._debug:
+            # Send the commands and get a response.
+            yield commands
+            resp = self.resp
+        else:
+            yield commands
+            resp = self.resp
+            # Print log messages.
+            for i in range(len(resp) - 1):
+                r_id = OutputData.get_data_type_id(resp[i])
+                if r_id == "logm":
+                    log_message = LogMessage(resp[i])
+                    print(f"[Build]: {log_message.get_message_type()}, {log_message.get_message()}\t"
+                          f"{log_message.get_object_type()}")
+        # Get collisions.
+        if self.magnebot_static is not None:
+            collisions = Collisions(resp=resp)
+            for int_pair in collisions.obj_collisions:
+                # Ignore collisions unless they are with the Magnebot.
+                if int_pair.int1 not in self.magnebot_static.body_parts and int_pair.int2 not in \
+                        self.magnebot_static.body_parts:
+                    continue
+                # Ignore collisions that don't involve an object.
+                if int_pair.int1 not in self.objects_static and int_pair.int2 not in self.objects_static:
+                    continue
+                if int_pair.int1 in self.objects_static:
+                    object_id = int_pair.int1
+                else:
+                    object_id = int_pair.int2
+                # Remove object IDs if this is an exit event.
+                if collisions.obj_collisions[int_pair].state == "exit" and object_id in self.colliding_objects:
+                    self.colliding_objects.remove(object_id)
+                # Add object IDs if this is a new enter event.
+                elif collisions.obj_collisions[int_pair].state == "enter" and object_id not in self.colliding_objects:
+                    self.colliding_objects.append(object_id)
+            # Check if the Magnebot is colliding with a wall.
+            for object_id in collisions.env_collisions:
+                # Ignore collisions with the floor.
+                if collisions.env_collisions[object_id].floor or object_id not in self.magnebot_static.joints:
+                    continue
+                if collisions.env_collisions[object_id].state == "enter":
+                    self.colliding_with_wall = True
+                    break
+                else:
+                    self.colliding_with_wall = False
+            # Get trigger events.
+            trigger_enters: Dict[int, List[int]] = dict()
+            trigger_stays: Dict[int, List[int]] = dict()
+            for i in range(len(resp) - 1):
+                r_id = OutputData.get_data_type_id(resp[i])
+                if r_id == "trco":
+                    trigger = TriggerCollision(resp[i])
+                    trigger_id = trigger.get_collidee_id()
+                    if trigger_id not in self._trigger_events:
+                        self._trigger_events[trigger_id] = list()
+                    collider_id = trigger.get_collider_id()
+                    state = trigger.get_state()
+                    # New trigger event.
+                    if state == "enter" and collider_id not in self._trigger_events[trigger_id]:
+                        self._trigger_events[trigger_id].append(collider_id)
+                        if trigger_id not in trigger_enters:
+                            trigger_enters[trigger_id] = list()
+                        trigger_enters[trigger_id].append(collider_id)
+                    # Ongoing trigger event.
+                    else:
+                        if trigger_id not in trigger_stays:
+                            trigger_stays[trigger_id] = list()
+                        trigger_stays[trigger_id].append(collider_id)
+            temp: Dict[int, List[int]] = dict()
+            # Remove any enter collisions that don't have stays.
+            for trigger_id in self._trigger_events:
+                if trigger_id not in trigger_stays:
+                    continue
+                stays: List[int] = list()
+                for collider_id in self._trigger_events[trigger_id]:
+                    if trigger_id in trigger_enters and collider_id in trigger_enters[trigger_id]:
+                        stays.append(collider_id)
+                    elif trigger_id in trigger_stays and collider_id in trigger_stays[trigger_id]:
+                        stays.append(collider_id)
+                temp[trigger_id] = stays
+            self._trigger_events = temp
+
+        # Check if the Magnebot is about to tip.
+        r = get_data(resp=resp, d_type=Robot)
+        m = get_data(resp=resp, d_type=Mag)
+        if r is not None and m is not None:
+            bottom = np.array(r.get_position())
+            top = np.array(m.get_top())
+            bottom_top_distance = np.linalg.norm(np.array([bottom[0], bottom[2]]) - np.array([top[0], top[2]]))
+            self._about_to_tip = bottom_top_distance > 0.2
+        return resp
+
+
+
     def _end_action(self, previous_action_was_move: bool = False) -> List[bytes]:
         """
         Set the scene state at the end of an action.
@@ -1043,7 +1159,7 @@ class Magnebot():
                                            "arm": Arm.right.name,
                                            "targets": []}])
         # Send the commands (see `communicate()` for how `_next_frame_commands` are handled).
-        resp = self.communicate([])
+        resp = yield from self.communicate([])
         self.state = SceneState(resp=resp)
         # Remove any held objects from the list of colliding objects.
         temp: List[int] = list()
@@ -1088,7 +1204,7 @@ class Magnebot():
                                            "joint_id": self.magnebot_static.arm_joints[ArmJoint.column],
                                            "target": 0}])
         # Wait until these two joints stop moving.
-        self._do_arm_motion(joint_ids=[self.magnebot_static.arm_joints[ArmJoint.torso],
+        yield from self._do_arm_motion(joint_ids=[self.magnebot_static.arm_joints[ArmJoint.torso],
                                        self.magnebot_static.arm_joints[ArmJoint.column]], non_moving=0.01)
         # Let the Magnebot move again.
         self._next_frame_commands.append({"$type": "set_immovable",
@@ -1332,14 +1448,14 @@ class Magnebot():
         :return: An `ActionStatus` indicating if the arms stopped moving and if not, why.
         """
 
-        state_0 = SceneState(self.communicate([]))
+        state_0 = SceneState(yield from self.communicate([]))
         if joint_ids is None:
             joint_ids = self.magnebot_static.arm_joints.values()
         # Continue the motion. Per frame, check if the movement is done.
         attempts = 0
         moving = True
         while moving and attempts < 200:
-            state_1 = SceneState(self.communicate([]))
+            state_1 = SceneState(yield from self.communicate([]))
             # Check if the action should stop here because of a conditional. If so, stop arm motion.
             if conditional is not None and conditional(state_1):
                 moving = False
@@ -1530,7 +1646,7 @@ class Magnebot():
         # Wait for the object to stop moving.
         while moving and num_frames < 200:
             moving = False
-            state_1 = SceneState(resp=self.communicate([]))
+            state_1 = SceneState(resp=yield from self.communicate([]))
             for object_id in object_ids:
                 # Stop if the object somehow fell below the floor.
                 if state_1.object_transforms[object_id].position[1] < -1:
@@ -1601,7 +1717,7 @@ class Magnebot():
         # Stop the wheels.
         self._stop_wheels(state=state)
         # Wait for the objects to stop moving.
-        self._wait_until_objects_stop(object_ids=held_objects)
+        yield from self._wait_until_objects_stop(object_ids=held_objects)
 
     def _get_bounds_sides(self, target: int) -> Tuple[List[np.array], List[bytes]]:
         """
