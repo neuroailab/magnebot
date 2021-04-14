@@ -326,6 +326,20 @@ class Magnebot():
         # Value = A list of trigger events that started and have continued (enter with an exit).
         self._trigger_events: Dict[int, List[int]] = dict()
 
+    def end_action(self, previous_action_was_move: bool = False):
+        """
+        Yields the result of _end_action. Useful when creating a generator from
+        _end_action directly. (Otherwise, a StopIteration error is hit upon 
+        completion.
+        """
+        resp = yield from self._end_action(previous_action_was_move)
+        yield resp
+
+    def turn_by_action(self, angle: float, aligned_at: float = 3, stop_on_collision: bool = True):
+        """Yields the result of turn_by for use when calling directly."""
+        status = yield from self.turn_by(angle, aligned_at, stop_on_collision)
+        yield status
+
     def turn_by(self, angle: float, aligned_at: float = 3, stop_on_collision: bool = True) -> ActionStatus:
         """
         Turn the Magnebot by an angle.
@@ -1058,7 +1072,6 @@ class Magnebot():
                     log_message = LogMessage(resp[i])
                     print(f"[Build]: {log_message.get_message_type()}, {log_message.get_message()}\t"
                           f"{log_message.get_object_type()}")
-        import pdb; pdb.set_trace()
         # Get collisions.
         if self.magnebot_static is not None:
             collisions = Collisions(resp=resp)
