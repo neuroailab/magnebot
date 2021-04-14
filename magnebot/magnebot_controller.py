@@ -210,6 +210,7 @@ class Magnebot():
         print(m.state.magnebot_transform.position)
         ```
         """
+        # TODO initialize in init_scene
         self.state: Optional[SceneState] = None
 
         """:field
@@ -261,6 +262,7 @@ class Magnebot():
             print(object_id, o.segmentation_color)
         ```
         """
+        # TODO initialize in init_scene
         self.objects_static: Dict[int, ObjectStatic] = dict()
 
         """:field
@@ -274,6 +276,7 @@ class Magnebot():
         print(m.magnebot_static.magnets)
         ```
         """
+        # TODO initialize in init_scene of env_mb
         self.magnebot_static: Optional[MagnebotStatic] = None
 
         """:field
@@ -424,7 +427,8 @@ class Magnebot():
                                  "target": target,
                                  "joint_id": self.magnebot_static.wheels[wheel]})
             # Wait until the wheels are done turning.
-            state_0 = SceneState(yield from resp=self.communicate(commands))
+            resp = yield from self.communicate(commands)
+            state_0 = SceneState(resp=resp)
             turn_done = False
             turn_frames = 0
             while not turn_done and turn_frames < 2000:
@@ -513,7 +517,8 @@ class Magnebot():
 
         angle = TDWUtils.get_angle_between(v1=self.state.magnebot_transform.forward,
                                            v2=target - self.state.magnebot_transform.position)
-        return yield from self.turn_by(angle=angle, aligned_at=aligned_at, stop_on_collision=stop_on_collision)
+        to_return = yield from self.turn_by(angle=angle, aligned_at=aligned_at, stop_on_collision=stop_on_collision)
+        return to_return
 
     def move_by(self, distance: float, arrived_at: float = 0.3, stop_on_collision: bool = True) -> ActionStatus:
         """
@@ -578,7 +583,8 @@ class Magnebot():
             print(f"move_by: {distance}")
         # The approximately number of iterations required, given the distance and speed.
         # Wait for the wheels to stop turning.
-        wheel_state = SceneState(resp=yield from self.communicate([]))
+        resp = yield from self.communicate([])
+        wheel_state = SceneState(resp=resp)
         while attempts < num_attempts:
             # We are trying to adjust the distance.
             if self._debug:
@@ -592,7 +598,8 @@ class Magnebot():
                                  "target": target,
                                  "joint_id": self.magnebot_static.wheels[wheel]})
             # Wait for the wheels to stop turning.
-            move_state_0 = SceneState(resp=yield from self.communicate(commands))
+            resp = yield from self.communicate(commands)
+            move_state_0 = SceneState(resp=resp)
             move_done = False
             move_frames = 0
             while not move_done and move_frames < 2000:
@@ -700,7 +707,8 @@ class Magnebot():
             else:
                 raise Exception(f"Invalid target: {target}")
 
-            return yield from self.move_by(distance=distance, arrived_at=arrived_at, stop_on_collision=stop_on_collision)
+            to_return = yield from self.move_by(distance=distance, arrived_at=arrived_at, stop_on_collision=stop_on_collision)
+            return to_return
         else:
             yield from self._end_action()
             return status
@@ -1033,18 +1041,16 @@ class Magnebot():
         commands.extend(self._next_frame_commands)
         self._next_frame_commands.clear()
         # Add per-frame commands.
-        commands.extend(self._per_frame_commands)
+        #commands.extend(self._per_frame_commands)
         # Skip some frames to speed up the simulation.
-        commands.append({"$type": "step_physics",
-                         "frames": self._skip_frames})
+        #commands.append({"$type": "step_physics",
+        #                 "frames": self._skip_frames})
 
         if not self._debug:
             # Send the commands and get a response.
-            yield commands
-            resp = self.resp
+            resp = yield commands
         else:
-            yield commands
-            resp = self.resp
+            resp = yield commands
             # Print log messages.
             for i in range(len(resp) - 1):
                 r_id = OutputData.get_data_type_id(resp[i])
@@ -1052,6 +1058,7 @@ class Magnebot():
                     log_message = LogMessage(resp[i])
                     print(f"[Build]: {log_message.get_message_type()}, {log_message.get_message()}\t"
                           f"{log_message.get_object_type()}")
+        import pdb; pdb.set_trace()
         # Get collisions.
         if self.magnebot_static is not None:
             collisions = Collisions(resp=resp)
@@ -1447,15 +1454,16 @@ class Magnebot():
 
         :return: An `ActionStatus` indicating if the arms stopped moving and if not, why.
         """
-
-        state_0 = SceneState(yield from self.communicate([]))
+        resp = yield from self.communicate([])
+        state_0 = SceneState(resp)
         if joint_ids is None:
             joint_ids = self.magnebot_static.arm_joints.values()
         # Continue the motion. Per frame, check if the movement is done.
         attempts = 0
         moving = True
         while moving and attempts < 200:
-            state_1 = SceneState(yield from self.communicate([]))
+            resp = yield from self.communicate([])
+            state_1 = SceneState(resp)
             # Check if the action should stop here because of a conditional. If so, stop arm motion.
             if conditional is not None and conditional(state_1):
                 moving = False
@@ -1593,18 +1601,22 @@ class Magnebot():
         bounds = get_data(resp=resp, d_type=Bounds)
         bs: Dict[int, np.array] = dict()
         for i in range(bounds.get_num()):
-            bs[bounds.get_id(i)] = np.array([float(np.abs(bounds.get_right(i)[0] - bounds.get_left(i)[0])),
-                                             float(np.abs(bounds.get_top(i)[1] - bounds.get_bottom(i)[1])),
-                                             float(np.abs(bounds.get_front(i)[2] - bounds.get_back(i)[2]))])
+            bs[bounds.get_id(i)] = np.array([
+                float(np.abs(bounds.get_right(i)[0] - bounds.get_left(i)[0])),
+                float(np.abs(bounds.get_top(i)[1] - bounds.get_bottom(i)[1])),
+                float(np.abs(bounds.get_front(i)[2] - bounds.get_back(i)[2]))
+            ])
         # Get the mass and object ID from the Rigidbodies. If the object ID isn't in this, we'll ignore that object.
         # (This is very unlikely!)
         rigidbodies = get_data(resp=resp, d_type=Rigidbodies)
         # Cache the static object. data.
         for i in range(rigidbodies.get_num()):
             object_id = rigidbodies.get_id(i)
-            self.objects_static[object_id] = ObjectStatic(name=names[object_id], object_id=object_id,
-                                                          segmentation_color=colors[object_id], size=bs[object_id],
-                                                          mass=rigidbodies.get_mass(i))
+            self.objects_static[object_id] = ObjectStatic(
+                name=names[object_id], object_id=object_id,
+                segmentation_color=colors[object_id], size=bs[object_id],
+                mass=rigidbodies.get_mass(i)
+            )
         # Cache the static robot data.
         self.magnebot_static = MagnebotStatic(static_robot=get_data(resp=resp, d_type=StaticRobot))
 
@@ -1646,7 +1658,8 @@ class Magnebot():
         # Wait for the object to stop moving.
         while moving and num_frames < 200:
             moving = False
-            state_1 = SceneState(resp=yield from self.communicate([]))
+            resp = yield from self.communicate([])
+            state_1 = SceneState(resp=resp)
             for object_id in object_ids:
                 # Stop if the object somehow fell below the floor.
                 if state_1.object_transforms[object_id].position[1] < -1:
