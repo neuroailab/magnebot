@@ -31,7 +31,7 @@ __OUTPUT_IDS: Dict[Type[OutputData], str] = {Transforms: "tran",
                                              ImageSensors: "imse"}
 
 
-def get_data(resp: List[bytes], d_type: Type[T]) -> Optional[T]:
+def get_data(resp: List[bytes], d_type: Type[T], agent_id : int = 0) -> Optional[T]:
     """
     Parse the output data list of byte arrays to get a single type output data object.
 
@@ -46,7 +46,7 @@ def get_data(resp: List[bytes], d_type: Type[T]) -> Optional[T]:
 
     for i in range(len(resp) - 1):
         r_id = OutputData.get_data_type_id(resp[i])
-        if r_id == __OUTPUT_IDS[d_type]:
+        if r_id == __OUTPUT_IDS[d_type] and (d_type not in [StaticRobot, Robot, Magnebot] or d_type(resp[i]).get_id() == agent_id):
             return d_type(resp[i])
     return None
 

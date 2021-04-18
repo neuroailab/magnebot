@@ -20,7 +20,7 @@ from magnebot.object_static import ObjectStatic
 from magnebot.magnebot_static import MagnebotStatic
 from magnebot.scene_state import SceneState
 from magnebot.action_status import ActionStatus
-from magnebot.paths import SPAWN_POSITIONS_PATH, TORSO_Y, OCCUPANCY_MAPS_DIRECTORY, SCENE_BOUNDS_PATH, \
+from magnebot.paths import SPAWN_POSITIONS_PATH, OCCUPANCY_MAPS_DIRECTORY, SCENE_BOUNDS_PATH, \
     TURN_CONSTANTS_PATH
 from magnebot.arm import Arm
 from magnebot.joint_type import JointType
@@ -145,13 +145,6 @@ class Magnebot():
                                               ArmJoint.elbow_right: JointType.revolute,
                                               ArmJoint.wrist_right: JointType.spherical}
 
-    # The ratio of prisimatic joint y values for the torso vs. worldspace y values.
-    # These aren't always an exact ratio (ok, Unity...), so they're cached here.
-    _TORSO_Y: Dict[float, float] = dict()
-    with TORSO_Y.open(encoding='utf-8-sig') as f:
-        r = DictReader(f)
-        for row in r:
-            _TORSO_Y[float(row["prismatic"])] = float(row["actual"])
     # The default height of the torso.
     _DEFAULT_TORSO_Y: float = 1
 
@@ -172,40 +165,24 @@ class Magnebot():
     # The circumference of the Magnebot wheel.
     _WHEEL_CIRCUMFERENCE: float = 2 * np.pi * _WHEEL_RADIUS
 
-    def __init__(self, port: int = 1071, launch_build: bool = False, screen_width: int = 256, screen_height: int = 256,
-                 debug: bool = False, auto_save_images: bool = False, images_directory: str = "images",
-                 random_seed: int = None, img_is_png: bool = False, skip_frames: int = 10,
-                 check_pypi_version: bool = True):
-        """
-        :param port: The socket port. [Read this](https://github.com/threedworld-mit/tdw/blob/master/Documentation/getting_started.md#command-line-arguments) for more information.
-        :param launch_build: If True, the build will launch automatically on the default port (1071). If False, you will need to launch the build yourself (for example, from a Docker container).
-        :param screen_width: The width of the screen in pixels.
-        :param screen_height: The height of the screen in pixels.
-        :param auto_save_images: If True, automatically save images to `images_directory` at the end of every action.
-        :param images_directory: The output directory for images if `auto_save_images == True`.
-        :param random_seed: The seed used for random numbers. If None, this is chosen randomly. In the Magnebot API this is used only when randomly selecting a start position for the Magnebot (see the `room` parameter of `init_scene()`). The same random seed is used in higher-level APIs such as the Transport Challenge.
-        :param debug: If True, enable debug mode. This controller will output messages to the console, including any warnings or errors sent by the build. It will also create 3D plots of arm articulation IK solutions.
-        :param img_is_png: If True, the `img` pass images will be .png files. If False,  the `img` pass images will be .jpg files, which are smaller; the build will run approximately 2% faster.
-        :param skip_frames: The build will return output data this many physics frames per simulation frame (`communicate()` call). This will greatly speed up the simulation, but eventually there will be a noticeable loss in physics accuracy. If you want to render every frame, set this to 0.
-        :param check_pypi_version: If True, compare the locally installed version of TDW and Magnebot to the most recent versions on PyPi.
-        """
-
+    def __init__(self, agent_id, debug=True):
+        self.agent_id = agent_id
         self._debug = debug
 
         """:field
-        [Dynamic data for all of the most recent frame after doing an action.](scene_state.md) This includes image data, physics metadata, etc.       
-        
+        [Dynamic data for all of the most recent frame after doing an action.](scene_state.md) This includes image data, physics metadata, etc.
+
         ```python
         from magnebot import Magnebot
-        
+
         m = Magnebot()
         m.init_scene(scene="2a", layout=1)
-        
+
         # Print the initial position of the Magnebot.
         print(m.state.magnebot_transform.position)
-        
+
         m.move_by(1)
-        
+
         # Print the new position of the Magnebot.
         print(m.state.magnebot_transform.position)
         ```
@@ -213,19 +190,6 @@ class Magnebot():
         # TODO initialize in init_scene
         self.state: Optional[SceneState] = None
 
-        """:field
-        If True, automatically save images to `images_directory` at the end of every action.
-        """
-        self.auto_save_images = auto_save_images
-
-        """:field
-        The output directory for images if `auto_save_images == True`. This is a [`Path` object from `pathlib`](https://docs.python.org/3/library/pathlib.html).
-        """
-        self.images_directory = Path(images_directory)
-        if not self.images_directory.exists():
-            self.images_directory.mkdir(parents=True)
-        if self.auto_save_images:
-            print(f"Images will be saved to: {self.images_directory.resolve()}")
 
         """:field
         The current (roll, pitch, yaw) angles of the Magnebot's camera in degrees as a numpy array. This is handled outside of `self.state` because it isn't calculated using output data from the build. See: `Magnebot.CAMERA_RPY_CONSTRAINTS` and `self.rotate_camera()`
@@ -249,14 +213,14 @@ class Magnebot():
 
         """:field
         [Data for all objects in the scene that that doesn't change between frames, such as object IDs, mass, etc.](object_static.md) Key = the ID of the object..
-        
+
         ```python
         from magnebot import Magnebot
-        
+
         m = Magnebot()
         m.init_scene(scene="2a", layout=1)
-        
-        # Print each object ID and segmentation color.     
+
+        # Print each object ID and segmentation color.
         for object_id in m.objects_static:
             o = m.objects_static[object_id]
             print(object_id, o.segmentation_color)
@@ -267,7 +231,7 @@ class Magnebot():
 
         """:field
         [Data for the Magnebot that doesn't change between frames.](magnebot_static.md)
-        
+
         ```python
         from magnebot import Magnebot
 
@@ -281,18 +245,18 @@ class Magnebot():
 
         """:field
         A numpy array of the occupancy map. This is None until you call `init_scene()`.
-        
+
         Shape = `(1, width, length)` where `width` and `length` are the number of cells in the grid. Each grid cell has a radius of 0.245. To convert from occupancy map `(x, y)` coordinates to worldspace `(x, z)` coordinates, see: `get_occupancy_position()`.
-        
+
         Each element is an integer describing the occupancy at that position.
-        
+
         | Value | Meaning |
         | --- | --- |
         | -1 | This position is outside of the scene. |
         | 0 | Unoccupied and navigable; the Magnebot can go here. |
         | 1 | This position is occupied by an object(s) or a wall. |
         | 2 | This position is free but not navigable (usually because there are objects in the way. |
-        
+
         ```python
         from magnebot import Magnebot
 
@@ -303,9 +267,9 @@ class Magnebot():
         print(m.occupancy_map[x][y]) # 0 (free and navigable position)
         print(m.get_occupancy_position(x, y)) # (1.1157886505126946, 2.2528389358520506)
         ```
-        
+
         Images of occupancy maps can be found [here](https://github.com/alters-mit/magnebot/tree/master/doc/images/occupancy_maps). The blue squares are free navigable positions. Images are named `[scene]_[layout].jpg` For example, the occupancy map image for scene "2a" layout 0 is: `2_0.jpg`.
-        
+
         The occupancy map is static, meaning that it won't update when objects are moved.
 
         Note that it is possible for the Magnebot to go to positions that aren't "free". The Magnebot's base is a rectangle that is longer on the sides than the front and back. The occupancy grid cell size is defined by the longer axis, so it is possible for the Magnebot to move forward and squeeze into a smaller space. The Magnebot can also push, lift, or otherwise move objects out of its way.
@@ -329,7 +293,7 @@ class Magnebot():
     def end_action(self, previous_action_was_move: bool = False):
         """
         Yields the result of _end_action. Useful when creating a generator from
-        _end_action directly. (Otherwise, a StopIteration error is hit upon 
+        _end_action directly. (Otherwise, a StopIteration error is hit upon
         completion.
         """
         resp = yield from self._end_action(previous_action_was_move)
@@ -338,6 +302,7 @@ class Magnebot():
     def turn_by_action(self, angle: float, aligned_at: float = 3, stop_on_collision: bool = True):
         """Yields the result of turn_by for use when calling directly."""
         status = yield from self.turn_by(angle, aligned_at, stop_on_collision)
+        print("status", status)
         yield status
 
     def turn_by(self, angle: float, aligned_at: float = 3, stop_on_collision: bool = True) -> ActionStatus:
@@ -378,6 +343,7 @@ class Magnebot():
         if stop_on_collision and ((angle > 0 and self._previous_collision == CollisionAction.turn_positive) or
                                   (angle < 0 and self._previous_collision == CollisionAction.turn_negative)):
             __set_collision_action(True)
+            print("collision!")
             return ActionStatus.collision
 
         if np.abs(angle) > 180:
@@ -394,6 +360,7 @@ class Magnebot():
             __set_collision_action(False)
             return ActionStatus.success
         self._start_action()
+        print("yielding from start_move_or_turn")
         yield from self._start_move_or_turn()
         attempts = 0
         if self._debug:
@@ -441,13 +408,14 @@ class Magnebot():
                                  "target": target,
                                  "joint_id": self.magnebot_static.wheels[wheel]})
             # Wait until the wheels are done turning.
+            print("commands from turn_by", commands)
             resp = yield from self.communicate(commands)
-            state_0 = SceneState(resp=resp)
+            state_0 = SceneState(resp=resp, agent_id=self.agent_id)
             turn_done = False
             turn_frames = 0
             while not turn_done and turn_frames < 2000:
                 resp = yield from self.communicate([])
-                state_1 = SceneState(resp=resp)
+                state_1 = SceneState(resp=resp, agent_id=self.agent_id)
                 # If the Magnebot is about to tip over, stop the action and try to correct the tip.
                 # Mark this is as a collision so the Magnebot can't do the same action again.
                 if self._about_to_tip:
@@ -598,7 +566,7 @@ class Magnebot():
         # The approximately number of iterations required, given the distance and speed.
         # Wait for the wheels to stop turning.
         resp = yield from self.communicate([])
-        wheel_state = SceneState(resp=resp)
+        wheel_state = SceneState(resp=resp, agent_id=self.agent_id)
         while attempts < num_attempts:
             # We are trying to adjust the distance.
             if self._debug:
@@ -613,12 +581,12 @@ class Magnebot():
                                  "joint_id": self.magnebot_static.wheels[wheel]})
             # Wait for the wheels to stop turning.
             resp = yield from self.communicate(commands)
-            move_state_0 = SceneState(resp=resp)
+            move_state_0 = SceneState(resp=resp, agent_id=self.agent_id)
             move_done = False
             move_frames = 0
             while not move_done and move_frames < 2000:
                 resp = yield from self.communicate([])
-                move_state_1 = SceneState(resp=resp)
+                move_state_1 = SceneState(resp=resp, agent_id=self.agent_id)
                 # If we're about to tip over, immediately stop and try to correct the tip.
                 # End the action and record it as a collision to prevent the Magnebot from trying the same action again.
                 if self._about_to_tip:
@@ -780,7 +748,7 @@ class Magnebot():
 
         # Start the IK action.
         status = self._start_ik(target=target, arm=arm, absolute=absolute, arrived_at=arrived_at,
-                                do_prismatic_first=target["y"] > Magnebot._TORSO_Y[Magnebot._DEFAULT_TORSO_Y])
+                                do_prismatic_first=target["y"] > Magnebot._DEFAULT_TORSO_Y)
         if status != ActionStatus.success:
             self._end_action()
             return status
@@ -832,7 +800,7 @@ class Magnebot():
                                           "arm": arm.name,
                                           "targets": [target]})
         sides, resp = self._get_bounds_sides(target=target)
-        state = SceneState(resp=resp)
+        state = SceneState(resp=resp, agent_id=self.agent_id)
         # Get the position of the magnet.
         magnet_position = state.joint_positions[self.magnebot_static.magnets[arm]]
         # Get the closest side to the magnet.
@@ -850,7 +818,7 @@ class Magnebot():
                                               "position": target_position})
         # Start the IK action.
         status = self._start_ik(target=target_position, arm=arm, absolute=True,
-                                do_prismatic_first=target_position["y"] > Magnebot._TORSO_Y[Magnebot._DEFAULT_TORSO_Y])
+                                do_prismatic_first=target_position["y"] > Magnebot._DEFAULT_TORSO_Y)
         if status != ActionStatus.success:
             # Disable grasping.
             self._next_frame_commands.append({"$type": "set_magnet_targets",
@@ -1059,7 +1027,7 @@ class Magnebot():
         # Skip some frames to speed up the simulation.
         #commands.append({"$type": "step_physics",
         #                 "frames": self._skip_frames})
-
+        print("commands in communicate", commands)
         if not self._debug:
             # Send the commands and get a response.
             resp = yield commands
@@ -1141,8 +1109,8 @@ class Magnebot():
             self._trigger_events = temp
 
         # Check if the Magnebot is about to tip.
-        r = get_data(resp=resp, d_type=Robot)
-        m = get_data(resp=resp, d_type=Mag)
+        r = get_data(resp=resp, d_type=Robot, agent_id=self.agent_id)
+        m = get_data(resp=resp, d_type=Mag, agent_id=self.agent_id)
         if r is not None and m is not None:
             bottom = np.array(r.get_position())
             top = np.array(m.get_top())
@@ -1180,7 +1148,7 @@ class Magnebot():
                                            "targets": []}])
         # Send the commands (see `communicate()` for how `_next_frame_commands` are handled).
         resp = yield from self.communicate([])
-        self.state = SceneState(resp=resp)
+        self.state = SceneState(resp=resp, agent_id=self.agent_id)
         # Remove any held objects from the list of colliding objects.
         temp: List[int] = list()
         for object_id in self.colliding_objects:
@@ -1192,9 +1160,6 @@ class Magnebot():
             if good:
                 temp.append(object_id)
         self.colliding_objects = temp
-        # Save images.
-        if self.auto_save_images:
-            self.state.save_images(output_directory=self.images_directory)
         return resp
 
     def _start_action(self) -> None:
@@ -1261,7 +1226,7 @@ class Magnebot():
 
             # Generate an IK chain, given the current desired torso height.
             # The extra height is the y position of the column's base.
-            chain = self.__get_ik_chain(arm=arm, torso_y=Magnebot._TORSO_Y[round(torso_prismatic, 2)],
+            chain = self.__get_ik_chain(arm=arm, torso_y=Magnebot._DEFAULT_TORSO_Y,
                                         allow_column=allow_column, object_id=object_id)
 
             # Get the IK solution.
@@ -1468,7 +1433,7 @@ class Magnebot():
         :return: An `ActionStatus` indicating if the arms stopped moving and if not, why.
         """
         resp = yield from self.communicate([])
-        state_0 = SceneState(resp)
+        state_0 = SceneState(resp, agent_id=self.agent_id)
         if joint_ids is None:
             joint_ids = self.magnebot_static.arm_joints.values()
         # Continue the motion. Per frame, check if the movement is done.
@@ -1476,7 +1441,7 @@ class Magnebot():
         moving = True
         while moving and attempts < 200:
             resp = yield from self.communicate([])
-            state_1 = SceneState(resp)
+            state_1 = SceneState(resp, agent_id=self.agent_id)
             # Check if the action should stop here because of a conditional. If so, stop arm motion.
             if conditional is not None and conditional(state_1):
                 moving = False
@@ -1580,7 +1545,7 @@ class Magnebot():
                                      "ids": [int(object_id)]})
             obj_position = np.array(get_data(resp=resp, d_type=Bounds).get_center(0))
             # Get the position of the magnet.
-            state = SceneState(resp=resp)
+            state = SceneState(resp=resp, agent_id=self.agent_id)
             magnet = state.joint_positions[self.magnebot_static.magnets[arm]]
             translation_vector = magnet - obj_position
             # Add the object as an IK link.
@@ -1591,7 +1556,7 @@ class Magnebot():
 
         return Chain(name=arm.name, links=links)
 
-    def _cache_static_data(self, resp: List[bytes]) -> None:
+    def _cache_static_data(self, resp: List[bytes], agent_id: int) -> None:
         """
         Cache static data after initializing the scene.
         Sets the initial SceneState.
@@ -1631,7 +1596,7 @@ class Magnebot():
                 mass=rigidbodies.get_mass(i)
             )
         # Cache the static robot data.
-        self.magnebot_static = MagnebotStatic(static_robot=get_data(resp=resp, d_type=StaticRobot))
+        self.magnebot_static = MagnebotStatic(static_robot=get_data(resp=resp, d_type=StaticRobot, agent_id=self.agent_id))
 
         # Parent the avatar camera to the torso.
         # We do this here rather then at the first frame because we need the ID of the torso.
@@ -1672,7 +1637,7 @@ class Magnebot():
         while moving and num_frames < 200:
             moving = False
             resp = yield from self.communicate([])
-            state_1 = SceneState(resp=resp)
+            state_1 = SceneState(resp=resp, agent_id=self.agent_id)
             for object_id in object_ids:
                 # Stop if the object somehow fell below the floor.
                 if state_1.object_transforms[object_id].position[1] < -1:

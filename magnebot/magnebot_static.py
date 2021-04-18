@@ -119,6 +119,7 @@ class MagnebotStatic:
         """
         self.root: int = -1
 
+        
         for i in range(static_robot.get_num_joints()):
             joint_id = static_robot.get_joint_id(i)
             # Cache the body parts.

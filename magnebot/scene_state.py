@@ -36,12 +36,12 @@ class SceneState:
     """
     FRAME_COUNT: int = 0
 
-    def __init__(self, resp: List[bytes]):
+    def __init__(self, resp: List[bytes], agent_id : int):
         """
         :param resp: The response from the build.
         """
 
-        r = get_data(resp=resp, d_type=Robot)
+        r = get_data(resp=resp, d_type=Robot, agent_id=agent_id)
         # Get data for the robot.
         """:field
         The [transform data](transform.md) of the Magnebot.
@@ -173,7 +173,7 @@ class SceneState:
                 images = Images(resp[i])
                 avatar_id = images.get_avatar_id()
                 # Save third-person camera images.
-                if avatar_id != "a":
+                if avatar_id == "a": # was originally != but I think it should be ==
                     if avatar_id not in self.third_person_images:
                         self.third_person_images[avatar_id] = dict()
                     for j in range(images.get_num_passes()):
@@ -183,7 +183,7 @@ class SceneState:
                             image_data = TDWUtils.get_shaped_depth_pass(images=images, index=j)
                         self.third_person_images[avatar_id][pass_mask[1:]] = image_data
                 # Save robot images.
-                else:
+                elif avatar_id == agent_id:
                     got_magnebot_images = True
                     for j in range(images.get_num_passes()):
                         image_data = images.get_image(j)
