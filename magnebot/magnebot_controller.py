@@ -305,6 +305,17 @@ class Magnebot():
         print("status", status)
         yield status
 
+    def move_by_action(self, distance: float, arrived_at: float = 0.3, stop_on_collision: bool = True):
+        """Yields the result of move_by for use when calling directly."""
+        status = yield from self.move_by(distance, arrived_at, stop_on_collision)
+        print("status", status)
+        yield status
+
+    def grasp_action(self, target: int, arm: Arm):
+        """Yields the result of grasp for use when calling directly."""
+        status = yield from grasp(target, arm)
+        yield status
+
     def turn_by(self, angle: float, aligned_at: float = 3, stop_on_collision: bool = True) -> ActionStatus:
         """
         Turn the Magnebot by an angle.
